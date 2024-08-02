@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"github.com/meixiezichuan/magent/etcd"
@@ -34,6 +35,12 @@ func createOrUpdateIPVSService(virtualIP, realIP string) error {
 func main() {
 	fmt.Printf("os.Args: %v", os.Args)
 	virtualIP := os.Args[1]
+	strs := strings.Split(virtualIP, ":")
+	if len(strs) != 2 {
+		fmt.Printf("Virtual IP shoud in fomat ip:port ")
+		return
+	}
+	port := strs[1]
 	for {
 		leaderIP, err := etcd.GetLeader()
 		if err != nil {
@@ -41,7 +48,7 @@ func main() {
 			continue
 		}
 		fmt.Println("Get leaderIP: ", leaderIP)
-		realIP := leaderIP + ":6443"
+		realIP := leaderIP + ":" + port
 		fmt.Println("realIP: ", realIP)
 		err = createOrUpdateIPVSService(virtualIP, realIP)
 		if err != nil {
