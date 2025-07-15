@@ -78,6 +78,26 @@ func parseSingleAddress(addrStr string) (Addr, error) {
 	return Addr{IP: host, Port: port}, nil
 }
 
+func setSysctl(param, value string) error {
+	cmd := exec.Command("sysctl", "-w", fmt.Sprintf("%s=%s", param, value))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to set %s: %v\nOutput: %s", param, err, string(output))
+	}
+	fmt.Printf("Set %s=%s\n", param, value)
+	return nil
+}
+
+func runCommand(cmdStr string, args ...string) error {
+	cmd := exec.Command(cmdStr, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to run '%s %v': %v\nOutput: %s", cmdStr, args, err, string(output))
+	}
+	fmt.Printf("Executed: %s %v\nOutput: %s\n", cmdStr, args, string(output))
+	return nil
+}
+
 func createOrUpdateIPVSService(virtualIP, realIP string) error {
 	// 清除现有的IPVS服务
 	cmd := exec.Command("ipvsadm", "-C")
@@ -97,6 +117,34 @@ func createOrUpdateIPVSService(virtualIP, realIP string) error {
 		return fmt.Errorf("failed to add real server: %v", err)
 	}
 
+	return nil
+}
+
+func linkVirtualToDummy(virtualIP string) error {
+	// Step 1: 创建 dummy 设备（如果不存在）
+
+	if err := runCommand("ip", "link", "add", "ipvs0", "type", "dummy"); err == nil {
+		// first time create dummy
+		err := setSysctl(fmt.Sprintf("net.ipv4.conf.%s.arp_ignore", "ipvs0"), "1")
+		if err != nil {
+			return err
+		}
+
+		err = setSysctl(fmt.Sprintf("net.ipv4.conf.%s.arp_announce", "ipvs0"), "2")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Step 2: 启用 dummy 接口
+	if err := runCommand("ip", "link", "set", "ipvs0", "up"); err != nil {
+		return err
+	}
+	ip32 := virtualIP + "/32"
+	// Step 3: 分配 IP 地址
+	if err := runCommand("ip", "addr", "add", ip32, "dev", "ipvs0"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -127,10 +175,14 @@ func main() {
 		}
 		fmt.Println("Get leaderIP: ", leaderIP)
 		for _, addr := range addrs {
-			virtualIP := addr.IP + ":" + strconv.Itoa(addr.Port)
-			realIP := leaderIP + ":" + strconv.Itoa(addr.Port)
-			fmt.Println("realIP: ", realIP)
-			err = createOrUpdateIPVSService(virtualIP, realIP)
+			err = linkVirtualToDummy(addr.IP)
+			if err != nil {
+				fmt.Printf("Error Link Virtual server: %v\n", err)
+			}
+			virtualServer := addr.IP + ":" + strconv.Itoa(addr.Port)
+			realServer := leaderIP + ":" + strconv.Itoa(addr.Port)
+			fmt.Println("realServer: ", realServer)
+			err = createOrUpdateIPVSService(virtualServer, realServer)
 			if err != nil {
 				fmt.Printf("Error creating IPVS service: %v\n", err)
 			} else {
